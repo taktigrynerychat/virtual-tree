@@ -20,7 +20,9 @@ import { VirtualRenderArea } from '../../models';
         <ng-content select="[tree-before]"></ng-content>
         <div class="vt-bottom-space" [style.top.px]="totalHeight"></div>
         <div class="vt-container" [style.top.px]="topBuffer">
-            <ng-template ngFor [ngForOf]="visibleItems" [ngForTemplate]="template"></ng-template>
+            @for (node of visibleItems; track node.item; let index = $index) {
+                <ng-container *ngTemplateOutlet="template; context: {$implicit: node, index}"/>
+            }
         </div>
         <ng-content select="[tree-after]"></ng-content>
     `,
@@ -51,7 +53,9 @@ import { VirtualRenderArea } from '../../models';
 export class OfVirtualTreeComponent implements OnDestroy, AfterViewInit {
     private disposers: (() => void)[] = [];
     private _model!: OfVirtualTree<any>;
-    private renderArea = new VirtualRenderArea();
+
+    @Input()
+    public renderArea!: VirtualRenderArea;
 
     /**
      * @ignore
@@ -83,17 +87,6 @@ export class OfVirtualTreeComponent implements OnDestroy, AfterViewInit {
     }
 
     /**
-     * Height each item in the tree
-     */
-    @Input()
-    public set itemHeight(value: number) {
-        this.renderArea.itemHeight = value;
-    }
-    public get itemHeight() {
-        return this.renderArea.itemHeight;
-    }
-
-    /**
      * @ignore
      */
     public get topBuffer() {
@@ -122,24 +115,6 @@ export class OfVirtualTreeComponent implements OnDestroy, AfterViewInit {
      */
     public ngOnDestroy() {
         this.dispose();
-    }
-
-    /**
-     * @ignore
-     */
-    @HostListener('keydown', ['$event'])
-    public handleKeydown(evt: KeyboardEvent) {
-        if (evt.key === 'Enter') {
-            this.model.selectHighlightedItem();
-        } else if (evt.key.startsWith('Arrow')) {
-            const direction = evt.key.replace('Arrow', ''),
-                nextHighlightedIndex = this.model.navigate(direction);
-
-            if (nextHighlightedIndex !== undefined) {
-                this.scrollToIndex(nextHighlightedIndex);
-            }
-            evt.preventDefault();
-        }
     }
 
     /**

@@ -9,8 +9,7 @@
 
 .of-node {
     display: flex;
-    white-space: nowrap;
-    align-items: center;
+    flex-direction: column;
 }
 
 .of-expander {

@@ -1,5 +1,9 @@
-.tree-container {
-    height: 400px;
+:host {
+    height: 100%;
     border: solid 1px #0003;
     display: block;
+
+    .tree-container {
+        height: 700px;
+    }
 }

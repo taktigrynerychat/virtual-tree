@@ -1,6 +1,7 @@
-import { Component, Input, Output, EventEmitter, ViewChild, AfterViewInit, OnDestroy, ElementRef, HostListener } from '@angular/core';
+import { Component, Input, Output, EventEmitter, ViewChild, ViewChildren, AfterViewInit, OnDestroy, ElementRef, signal, QueryList, ChangeDetectorRef, OnInit } from '@angular/core';
 import { OfVirtualTree, OfTreeConfig, OfVirtualTreeComponent } from '../virtual-tree';
-import { Node } from '../../models';
+import { Node, VirtualRenderArea } from '../../models';
+import { LogMethods } from '../../../utils';
 
 /**
  * State accessor providing behavior state given a data item
@@ -58,61 +59,12 @@ export interface VtBasicTreeConfig<T> extends OfTreeConfig<T> {
      * @ignore
      */
     getDomNodeAttr(item: T, node: Node<T>, state: VtItemState<T>): { [attr: string]: any } | undefined;
-    /**
-     * Determines whether the passed item should be draggable. Return true if the item is draggable
-     * @param item The data item for which draggability should be returned
-     */
-    canDrag(item: T): boolean;
-    /**
-     * Determines whether the a drop should be allowed. Return true to allow drop
-     * @param args Parameters of the drag event
-     */
-    canDrop(args: DragArgs<T>): boolean;
-    /**
-     * Handler for executing a move event. Perform update to your data based on the passed drag event data.
-     * Return a promise that is resolved when your data is updated
-     * @param args Parameters of the drag event
-     */
-    move(args: DragArgs<T>): Promise<void>;
-    /**
-     * For cross-window drag handling, provide data accessible to the drop target
-     * @param item
-     */
-    getDragData(item: T): string;
 }
 
 export enum DefaultIcons {
     file = 'of-file-text',
     folder = 'of-folder',
     folderOpen = 'of-folder-open'
-}
-
-type DragPos = 'before' | 'on' | 'after';
-
-/**
- * Parameters of a drag handlers (move, canDrop)
- */
-interface DragArgs<T> {
-    /**
-     * The node being dragged
-     */
-    itemNode?: Node<T>;
-    /**
-     * The node being dragged over or dropped on
-     */
-    parentNode: Node<T>;
-    /**
-     * The data item being dragged
-     */
-    item: T | any;
-    /**
-     * The data item being dragged over or dropped on
-     */
-    parent?: T;
-    /**
-     * The index within the parent node where the item should be dropped
-     */
-    index?: number;
 }
 
 @Component({
@@ -126,8 +78,7 @@ export class OfBasicTreeComponent implements AfterViewInit, OnDestroy {
     private _filterText: string | undefined = '';
     private loadingItems = new Set<any>();
     private ownId = Math.random().toString();
-    private ownDragItem?: Node<any>;
-    private dragExpand: { item?: Node<any>; timeout?: number } = {};
+
     private stateProvider = Object.seal({
         isExpanded: (item: any) => this.model.isExpanded(item),
         isSelected: (item: any) => this.model.isSelected(item),
@@ -135,7 +86,7 @@ export class OfBasicTreeComponent implements AfterViewInit, OnDestroy {
         isLoading: (item: any) => this.isItemLoading(item)
     }) as VtItemState<any>;
     private _model: OfVirtualTree<any>;
-    private _config = {
+    private _config: VtBasicTreeConfig<any> = {
         childAccessor: (item: any) => this.getChildren(item),
         getIcon: (item: any) =>
             item.type !== 'd' && item.type !== 'Folder'
@@ -149,12 +100,7 @@ export class OfBasicTreeComponent implements AfterViewInit, OnDestroy {
         filterThrottle: 500,
         filterTextMinLength: 2,
         lazyLoad: true,
-        canDrag: () => false,
-        canDrop: () => false,
-        move: () => Promise.resolve(),
-        getDragData: () => '{}'
-    } as VtBasicTreeConfig<any>;
-    private hostBox?: ClientRect;
+    };
 
     /**
      * @ignore
@@ -197,17 +143,6 @@ export class OfBasicTreeComponent implements AfterViewInit, OnDestroy {
      */
     @Input()
     public itemHeight: number;
-
-    /**
-     * @ignore
-     */
-    public isDraggingOver = false;
-
-    /**
-     * @ignore
-     */
-    @ViewChild('dragOverlay')
-    public dragOverlay?: ElementRef<HTMLDivElement>;
 
     private childAccessor = (item: any) => item.children;
 
@@ -278,17 +213,38 @@ export class OfBasicTreeComponent implements AfterViewInit, OnDestroy {
         }
     }
 
-    constructor(private host: ElementRef<HTMLElement>) {
+    public renderArea = new VirtualRenderArea();
+
+    @ViewChildren('expanded', { read: ElementRef })
+    public readonly expandedNodesRefs!: QueryList<ElementRef>;
+
+    public heightAdjustment!: number;
+
+    constructor(private host: ElementRef<HTMLElement>, private readonly cdr: ChangeDetectorRef) {
         this._model = new OfVirtualTree<any>(this.config);
         this.bindModelEvents();
         this.itemHeight = 1.5 * parseFloat(window.getComputedStyle(document.body).fontSize || '16');
+        this.renderArea.itemHeight = this.itemHeight;
     }
-
+    
     ngAfterViewInit() {
         setTimeout(() => {
             this.tree.invalidateSize();
             this.model.invalidateData();
         }, 1);
+        this.expandedNodesRefs.changes.subscribe((data) => {
+            const expandedNode = this.expandedNode();
+            console.log(expandedNode);
+            
+            if (expandedNode && data.first) {
+                const index = this.model.getNodeIndex(expandedNode);
+                this.renderArea.heightAdjustment = [data.first.nativeElement.offsetHeight, index];
+                this.cdr.detectChanges();
+            } else if(!expandedNode && !data.first) {
+                this.renderArea.heightAdjustment = [0 , 0];
+                this.cdr.detectChanges();
+            }
+        });
     }
 
     ngOnDestroy() {
@@ -341,181 +297,6 @@ export class OfBasicTreeComponent implements AfterViewInit, OnDestroy {
     public getExpanderIcon(item: any) {
         const iconType = this.model.isExpanded(item) ? 'down' : 'right';
         return `of-expander of-expander-${iconType}`;
-    }
-
-    /** @ignore */
-    public handleDragstart(evt: DragEvent, node: Node<any>) {
-        this.ownDragItem = node;
-        if (this.canDrag(node.item)) {
-            if (evt.dataTransfer) {
-                evt.dataTransfer.dropEffect = 'move';
-                evt.dataTransfer.setData('application/json.of-tree-item', this.getDragData(node.item));
-                evt.dataTransfer.setData(`text/plain.${this.ownId}`, '{}');
-            }
-        }
-    }
-
-    /** @ignore */
-    @HostListener('dragover', ['$event'])
-    public handleDragover(evt: DragEvent) {
-        this.isDraggingOver = true;
-        if (evt.dataTransfer && evt.dataTransfer.types.includes('application/json.of-tree-item')) {
-            const dropInfo = this.getDropInfo(evt, false);
-            if (dropInfo.canDrop()) {
-                this.adjustDragOverlay(dropInfo);
-                evt.preventDefault();
-            }
-            if (dropInfo.draggedItem !== dropInfo.parent) {
-                this.tryDragExpand(dropInfo);
-            }
-        }
-    }
-
-    /** @ignore */
-    @HostListener('dragleave')
-    public handleDragleave() {
-        this.isDraggingOver = false;
-    }
-
-    /** @ignore */
-    @HostListener('drop', ['$event'])
-    public handleDrop(evt: DragEvent) {
-        this.isDraggingOver = false;
-        if (evt.dataTransfer && evt.dataTransfer.types.includes('application/json.of-tree-item')) {
-            const dropInfo = this.getDropInfo(evt, true);
-            if (dropInfo.canDrop()) {
-                this.move(dropInfo.draggedItem, dropInfo.parent!, dropInfo.index);
-            }
-        }
-    }
-
-    /** @ignore */
-    public canDrag(item: any) {
-        return this.config.canDrag!(item);
-    }
-
-    private tryDragExpand(dropInfo: { parent?: Node<any>; area: DragPos }) {
-        if (dropInfo.area !== 'on' || this.dragExpand.item !== dropInfo.parent) {
-            clearTimeout(this.dragExpand.timeout);
-        }
-        if (this.dragExpand.item !== dropInfo.parent && dropInfo.parent && dropInfo.area === 'on') {
-            this.dragExpand.item = dropInfo.parent;
-            this.dragExpand.timeout = window.setTimeout(() => {
-                this.model.setExpanded(dropInfo.parent!.item, true);
-                this.model.invalidateData();
-            }, 600);
-        }
-    }
-
-    private async move(item: any, parent: Node<any>, index: number | undefined) {
-        if (this.config.move) {
-            const itemNode = item instanceof Node ? item : undefined,
-                itemData = itemNode ? itemNode.item : item,
-                parentItem = parent ? parent.item : undefined,
-                fromParent = itemNode && itemNode.parent ? itemNode.parent.item : undefined;
-
-            await this.config.move({
-                itemNode,
-                parentNode: parent,
-                item: itemData,
-                parent: parentItem,
-                index
-            });
-
-            this.model.invalidateItem(fromParent);
-            this.model.invalidateItem(parent.item);
-        }
-    }
-
-    private getDropInfo(evt: DragEvent, readExternalData: boolean) {
-        const box = this.getHostBox(),
-            boxY = box ? box.top : 0,
-            yPos = evt.pageY - boxY,
-            target = this.getItemPosition(yPos),
-            draggedItem = evt.dataTransfer!.types.includes(`text/plain.${this.ownId}`)
-                ? this.ownDragItem
-                : readExternalData && evt.dataTransfer
-                ? JSON.parse(evt.dataTransfer.getData('application/json.oce-tree-item'))
-                : undefined;
-
-        return {
-            draggedItem,
-            index: target.itemIndex,
-            parent: target.item,
-            flatIndex: target.flatIndex,
-            area: target.area,
-            canDrop: () => {
-                const item = draggedItem instanceof Node ? draggedItem.item : draggedItem,
-                    itemNode = this.model.getTreeNode(item),
-                    parentNode = target.item!,
-                    parent = target.item ? target.item.item : undefined,
-                    index = target.itemIndex;
-
-                return this.canDrop(itemNode, parentNode, item, parent, index);
-            }
-        };
-    }
-
-    private getItemPosition(yPos: number) {
-        const scroll = this.tree.getScrollPos(),
-            flatIndex = Math.floor((yPos + scroll) / this.itemHeight),
-            itemPos = flatIndex * this.itemHeight - scroll,
-            buffer = this.itemHeight / 4,
-            area: DragPos = itemPos + buffer > yPos ? 'before' : itemPos + this.itemHeight - buffer < yPos ? 'after' : 'on',
-            itemAtIndex = this.model.items[flatIndex],
-            itemIndex =
-                !itemAtIndex || !itemAtIndex.parent
-                    ? undefined
-                    : area === 'before'
-                    ? itemAtIndex.index
-                    : area === 'after'
-                    ? itemAtIndex.index + 1
-                    : undefined,
-            item = !itemAtIndex ? undefined : area === 'on' ? itemAtIndex : itemAtIndex.parent;
-
-        return { flatIndex, itemIndex, item, area };
-    }
-
-    private getHostBox() {
-        if (!this.hostBox && this.host.nativeElement) {
-            this.hostBox = this.host.nativeElement.getBoundingClientRect();
-            setTimeout(() => (this.hostBox = undefined), 1000);
-        }
-
-        return this.hostBox;
-    }
-
-    private getDragData(item: any) {
-        return this.config.getDragData!(item);
-    }
-
-    private canDrop(itemNode: Node<any> | undefined, parentNode: Node<any>, item: any, parent: any, index: number | undefined) {
-        if (this.config.canDrop) {
-            return this.config.canDrop({ itemNode, parentNode, item, parent, index });
-        }
-        return false;
-    }
-
-    private adjustDragOverlay(dropInfo: { flatIndex: number; index: number | undefined; area: DragPos } | undefined) {
-        if (this.dragOverlay && this.dragOverlay.nativeElement) {
-            const el = this.dragOverlay.nativeElement;
-            if (dropInfo) {
-                const buffer = this.itemHeight / 4,
-                    baseY = dropInfo.flatIndex * this.itemHeight,
-                    y = dropInfo.area === 'before' ? baseY - buffer : dropInfo.area === 'after' ? baseY + this.itemHeight - buffer : baseY,
-                    h = dropInfo.area === 'on' ? this.itemHeight : buffer * 2;
-
-                el.style.top = y + 'px';
-                el.style.height = h + 'px';
-                if (dropInfo.area === 'on') {
-                    el.classList.remove('vbt-dragoverlay-between');
-                } else {
-                    el.classList.add('vbt-dragoverlay-between');
-                }
-            } else {
-                el.style.height = '0px';
-            }
-        }
     }
 
     private getChildren(item: any) {
@@ -585,5 +366,10 @@ export class OfBasicTreeComponent implements AfterViewInit, OnDestroy {
             this.model.expandToSelectedItem();
             this.tree.scrollToSelected();
         }
+    }
+
+    public expandedNode = signal<Node<unknown> | null>(null);
+    public expandNode(node: any) {
+        this.expandedNode() === node ? this.expandedNode.set(null) : this.expandedNode.set(node);
     }
 }

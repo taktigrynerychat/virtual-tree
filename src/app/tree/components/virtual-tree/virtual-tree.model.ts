@@ -68,6 +68,10 @@ export class OfVirtualTree<ItemType> {
         return node ? this.items.indexOf(node) : -1;
     }
 
+    public getNodeIndex(node: Node<ItemType>): number {
+        return this.items.indexOf(node);
+    }
+
     /**
      * Get the TreeQuery's node for the passed item
      * @param item item for which to get the node

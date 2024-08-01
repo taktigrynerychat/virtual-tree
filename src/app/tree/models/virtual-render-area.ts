@@ -6,6 +6,8 @@ export class VirtualRenderArea {
     private _viewerHeight = 0;
     private _itemCount = 0;
     private _itemHeight = 0;
+    private _heightAdjustment = 0;
+    private _heightAdjustmentIndex: number | null = null;
     private _visibleCount = 0;
     private _visibleStart = 0;
     private _topBuffer = 0;
@@ -21,6 +23,17 @@ export class VirtualRenderArea {
     }
     public get itemHeight() {
         return this._itemHeight;
+    }
+
+    public set heightAdjustment([value, index]: [number, number | null]) {
+        this._heightAdjustment = value;
+        this._heightAdjustmentIndex = index;
+        this.invalidateTotalHeight();
+        this.invalidateViewRange();
+        this.invalidateScrollPos();
+    }
+    public get heightAdjustment() {
+        return [this._heightAdjustment, this._heightAdjustmentIndex];
     }
 
     public set itemCount(value: number) {
@@ -69,15 +82,34 @@ export class VirtualRenderArea {
     }
 
     private invalidateViewRange() {
-        const maxItems = Math.ceil(this._viewerHeight / this._itemHeight) + 1;
+        const heightAdjustment = this._heightAdjustment ?? 0;
 
-        this._visibleStart = Math.floor(this._scrollPos / this._itemHeight);
-        this._visibleCount = Math.min(this._itemCount - this._visibleStart, maxItems);
-        this._topBuffer = this._visibleStart * this._itemHeight;
+        this._visibleStart = Math.max(0, Math.floor(this._scrollPos / this._itemHeight - (heightAdjustment / this._itemHeight)));
+        
+        const isHeightAdjustmentApplicable = this._heightAdjustmentIndex !== null && this._visibleStart > this._heightAdjustmentIndex;
+
+        const maxItems = isHeightAdjustmentApplicable
+        ? Math.ceil(this._viewerHeight / this._itemHeight)
+        : Math.max(1, Math.ceil(this._viewerHeight / this._itemHeight + 1 - (heightAdjustment / this._itemHeight)));
+        
+        this._visibleCount = Math.max(Math.ceil(this._viewerHeight / this._itemHeight), maxItems)
+
+        this._topBuffer = isHeightAdjustmentApplicable
+        ? this._visibleStart * this._itemHeight + heightAdjustment
+        : this._visibleStart * this._itemHeight;
+
+        console.table({
+            maxItems,
+            _heightAdjustment: this._heightAdjustment,
+            _heightAdjustmentIndex: this._heightAdjustmentIndex,
+            _visibleStart: this._visibleStart,
+            _visibleCount: this._visibleCount,
+            _topBuffer: this._topBuffer
+        });
     }
 
     private invalidateTotalHeight() {
-        this._totalHeight = this._itemHeight * this._itemCount;
+        this._totalHeight = this._itemHeight * this._itemCount + (this._heightAdjustment ?? 0);
     }
 
     private invalidateScrollPos() {
